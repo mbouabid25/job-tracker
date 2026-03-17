@@ -1,0 +1,72 @@
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { getJobEmails } from "@/lib/gmail";
+import { classifyApplications } from "@/lib/classifier";
+import { upsertJobs, getJobs, getLastSynced } from "@/lib/db";
+import { NextResponse } from "next/server";
+
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+export async function GET(req) {
+  const session = await getServerSession(authOptions);
+  if (!session?.accessToken) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+  if (session.error === "RefreshAccessTokenError") {
+    return NextResponse.json({ error: "Session expired. Please sign in again." }, { status: 401 });
+  }
+
+  const userId = session.user.email;
+  const { searchParams } = new URL(req.url);
+  const forceRefresh = searchParams.get("refresh") === "true";
+
+  const lastSynced = getLastSynced(userId);
+  const cacheValid =
+    lastSynced &&
+    Date.now() - new Date(lastSynced + "Z").getTime() < CACHE_TTL_MS;
+
+  if (!forceRefresh && cacheValid) {
+    return NextResponse.json({
+      jobs: getJobs(userId),
+      lastSynced,
+      cached: true,
+    });
+  }
+
+  try {
+    const emails = await getJobEmails(session.accessToken);
+    const classified = await classifyApplications(emails);
+    if (classified.length > 0) upsertJobs(userId, classified);
+    return NextResponse.json({
+      jobs: getJobs(userId),
+      lastSynced: new Date().toISOString(),
+      cached: false,
+      found: classified.length,
+    });
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
+}
+
+export async function PATCH(req) {
+  const session = await getServerSession(authOptions);
+  if (!session?.accessToken) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+  const { updateJobStatus } = await import("@/lib/db");
+  const { id, status } = await req.json();
+  updateJobStatus(session.user.email, id, status);
+  return NextResponse.json({ ok: true });
+}
+
+export async function DELETE(req) {
+  const session = await getServerSession(authOptions);
+  if (!session?.accessToken) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+  const { deleteJob } = await import("@/lib/db");
+  const { id } = await req.json();
+  deleteJob(session.user.email, id);
+  return NextResponse.json({ ok: true });
+}
