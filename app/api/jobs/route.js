@@ -1,8 +1,8 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getJobEmails } from "@/lib/gmail";
+import { fetchJobEmailsForUser, ensureSessionAccount, markEmailsAsProcessed } from "@/lib/mail";
 import { classifyApplications } from "@/lib/classifier";
-import { upsertJobs, getJobs, getLastSynced } from "@/lib/db";
+import { upsertJobs, getJobs, getLastSynced, markSynced } from "@/lib/db";
 import { NextResponse } from "next/server";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -20,6 +20,13 @@ export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const forceRefresh = searchParams.get("refresh") === "true";
 
+  // Always persist the currently signed-in account so it participates in scans
+  try {
+    await ensureSessionAccount(session);
+  } catch (e) {
+    console.error("Failed to persist primary account", e);
+  }
+
   const lastSynced = getLastSynced(userId);
   const cacheValid =
     lastSynced &&
@@ -34,9 +41,11 @@ export async function GET(req) {
   }
 
   try {
-    const emails = await getJobEmails(session.accessToken);
+    const emails = await fetchJobEmailsForUser(userId, lastSynced || null);
+    markEmailsAsProcessed(userId, emails);
     const classified = await classifyApplications(emails);
     if (classified.length > 0) upsertJobs(userId, classified);
+    else markSynced(userId);
     return NextResponse.json({
       jobs: getJobs(userId),
       lastSynced: new Date().toISOString(),

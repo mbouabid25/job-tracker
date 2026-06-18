@@ -1,10 +1,11 @@
 # Job Application Tracker
 
-Automatically parse your Gmail for job applications and track them from confirmation to offer, powered by Claude.
+Automatically parse your Gmail and Outlook inboxes for job applications and track them from confirmation to offer, powered by Claude.
 
 ## Features
 
-- Sign in with Google (read-only Gmail access)
+- Sign in with Google or Outlook (read-only mail access)
+- Link multiple inboxes per user and scan them together
 - Claude scans emails and extracts: company, position, recruiter, and status
 - Status stages: Applied → Screening → Interview → Offer / Rejected
 - Auto-refreshes every 30 minutes
@@ -35,7 +36,23 @@ npm install
    - Authorized redirect URIs:
      - `http://localhost:3000/api/auth/callback/google` (dev)
      - `https://your-domain.com/api/auth/callback/google` (production)
+      - `http://localhost:3000/api/oauth/google/callback` (dev, for linking extra inboxes)
+      - `https://your-domain.com/api/oauth/google/callback` (prod, for linking extra inboxes)
 5. Copy the Client ID and Client Secret
+
+### 2b. Microsoft Entra app (for Outlook)
+
+1. Go to [portal.azure.com](https://portal.azure.com) → Microsoft Entra ID → App registrations → **New registration**
+2. Supported account types: choose **Accounts in any organizational directory and personal Microsoft accounts**
+3. Redirect URI type **Web**:
+   - `http://localhost:3000/api/auth/callback/azure-ad` (dev)
+   - `https://your-domain.com/api/auth/callback/azure-ad` (prod)
+   - Also add the custom OAuth callback used for linking extra inboxes:
+     - `http://localhost:3000/api/oauth/outlook/callback`
+     - `https://your-domain.com/api/oauth/outlook/callback`
+4. After creating, go to **Certificates & secrets** → **New client secret** and copy the value
+5. In **API permissions**, add **Microsoft Graph** → Delegated → `Mail.Read` and `offline_access`
+6. Copy the Application (client) ID and Directory (tenant) ID
 
 ### 3. Environment variables
 
@@ -50,6 +67,10 @@ Fill in the values:
 ```env
 GOOGLE_CLIENT_ID=your_client_id
 GOOGLE_CLIENT_SECRET=your_client_secret
+# Outlook (Microsoft)
+AZURE_AD_CLIENT_ID=your_azure_app_client_id
+AZURE_AD_CLIENT_SECRET=your_azure_app_client_secret
+AZURE_AD_TENANT_ID=common
 NEXTAUTH_SECRET=$(openssl rand -base64 32)
 NEXTAUTH_URL=http://localhost:3000
 ANTHROPIC_API_KEY=your_anthropic_key
@@ -113,4 +134,3 @@ To let others use it:
 4. Claude classifies each unique application by company + position and assigns a status
 5. Results are upserted into a SQLite database keyed by user email
 6. The frontend polls every 30 minutes (or on demand)
-

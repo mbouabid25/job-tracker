@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { signOut } from "next-auth/react";
 
 const REFRESH_MS = 10 * 60 * 1000;
+const PAGE_SIZE = 20;
 
 const STATUS = {
   applied:   { label: "Applied",    color: "purple" },
@@ -105,6 +106,10 @@ export default function JobTracker({ session }) {
   const [filter, setFilter] = useState("all");
   const [countdown, setCountdown] = useState(null);
   const [openDropdown, setOpenDropdown] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const nextRefreshAt = useRef(null);
 
   const load = useCallback(async (force = false) => {
@@ -127,11 +132,26 @@ export default function JobTracker({ session }) {
     }
   }, []);
 
+  const loadAccounts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/accounts");
+      const data = await res.json();
+      if (res.ok) {
+        setAccounts(data.accounts || []);
+      }
+    } catch (_) {
+      setAccounts([]);
+    } finally {
+      setAccountsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     load();
+    loadAccounts();
     const interval = setInterval(() => load(true), REFRESH_MS);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, loadAccounts]);
 
   useEffect(() => {
     if (!nextRefreshAt.current) return;
@@ -140,6 +160,23 @@ export default function JobTracker({ session }) {
     }, 1000);
     return () => clearInterval(tick);
   }, [lastSynced]);
+
+  useEffect(() => {
+    const handler = (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type === "account-linked") {
+        loadAccounts();
+        load(true);
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [load, loadAccounts]);
+
+  // Reset pagination when data/filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [filter, jobs.length]);
 
   const updateStatus = async (jobId, status) => {
     setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, status } : j)));
@@ -159,7 +196,28 @@ export default function JobTracker({ session }) {
     });
   };
 
+  const connectProvider = (provider) => {
+    const w = 520;
+    const h = 640;
+    const y = window.top.outerHeight / 2 + window.top.screenY - h / 2;
+    const x = window.top.outerWidth / 2 + window.top.screenX - w / 2;
+    window.open(`/api/oauth/${provider}/start`, `${provider}-oauth`, `width=${w},height=${h},left=${x},top=${y}`);
+  };
+
+  const removeAccount = async (id) => {
+    await fetch("/api/accounts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    setAccounts((prev) => prev.filter((a) => a.id !== id));
+    load(true);
+  };
+
   const filtered = filter === "all" ? jobs : jobs.filter((j) => j.status === filter);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   const stats = {
     total: jobs.length,
@@ -184,7 +242,7 @@ export default function JobTracker({ session }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)" }} onClick={() => setOpenDropdown(null)}>
+    <div style={{ minHeight: "100vh", background: "var(--bg)" }} onClick={() => { setOpenDropdown(null); setAccountMenuOpen(false); }}>
       {/* Nav */}
       <nav style={{
         background: "var(--surface)",
@@ -203,8 +261,80 @@ export default function JobTracker({ session }) {
           </svg>
           <span style={{ fontWeight: 600, fontSize: 15 }}>Job tracker</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 13, color: "var(--text-2)" }}>{session.user.email}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, position: "relative" }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); setAccountMenuOpen((o) => !o); }}
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "6px 10px",
+              color: "var(--text)",
+              fontSize: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span style={{ color: "var(--text-2)" }}>{session.user.email}</span>
+            <span style={{ fontSize: 10, color: "var(--text-3)" }}>▾</span>
+          </button>
+          {accountMenuOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute",
+                top: "110%",
+                right: 0,
+                zIndex: 60,
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                borderRadius: 10,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+                minWidth: 260,
+                padding: 10,
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Connected inboxes</div>
+              {accountsLoading ? (
+                <div style={{ fontSize: 12, color: "var(--text-3)" }}>Loading…</div>
+              ) : accounts.length === 0 ? (
+                <div style={{ fontSize: 12, color: "var(--text-2)" }}>No inboxes linked yet.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {accounts.map((a) => (
+                    <div key={a.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", border: "1px solid var(--border-md)", borderRadius: 8 }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>{a.provider === "google" ? "Gmail" : "Outlook"}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-2)", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>{a.account_email || "—"}</div>
+                      </div>
+                      <button
+                        onClick={() => removeAccount(a.id)}
+                        style={{ background: "transparent", border: "none", color: "var(--text-3)", fontSize: 14, padding: 4, cursor: "pointer" }}
+                        title="Disconnect"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => connectProvider("google")}
+                  style={{ background: "var(--surface2)", border: "1px solid var(--border-md)", borderRadius: 8, padding: "7px 10px", fontSize: 12, fontWeight: 500 }}
+                >
+                  + Add Gmail
+                </button>
+                <button
+                  onClick={() => connectProvider("outlook")}
+                  style={{ background: "var(--surface2)", border: "1px solid var(--border-md)", borderRadius: 8, padding: "7px 10px", fontSize: 12, fontWeight: 500 }}
+                >
+                  + Add Outlook
+                </button>
+              </div>
+            </div>
+          )}
           <button
             onClick={() => signOut()}
             style={{
@@ -229,7 +359,7 @@ export default function JobTracker({ session }) {
             <p style={{ fontSize: 13, color: "var(--text-2)" }}>
               {lastSynced
                 ? `Synced ${new Date(lastSynced).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${countdown !== null ? ` · next refresh in ${formatCountdown(countdown)}` : ""}`
-                : "Connecting to Gmail..."}
+                : "Connecting to your inboxes..."}
             </p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -268,7 +398,7 @@ export default function JobTracker({ session }) {
                   <span style={{ width: 14, height: 14, border: "1.5px solid", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite", display: "inline-block" }} />
                   Scanning...
                 </>
-              ) : "Refresh now"}
+              ) : "Refresh emails"}
             </button>
           </div>
         </div>
@@ -368,11 +498,11 @@ export default function JobTracker({ session }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((job, i) => (
+                {paginated.map((job, i) => (
                   <tr
                     key={job.id}
                     style={{
-                      borderBottom: i < filtered.length - 1 ? "1px solid var(--border)" : "none",
+                      borderBottom: i < paginated.length - 1 ? "1px solid var(--border)" : "none",
                     }}
                   >
                     <td style={{ padding: "12px 14px" }}>
@@ -380,7 +510,11 @@ export default function JobTracker({ session }) {
                       <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 1 }}>{job.position}</div>
                     </td>
                     <td style={{ padding: "12px 14px", position: "relative" }}>
-                      <div onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === job.id ? null : job.id); }} style={{ display: "inline-block" }}>
+                      <div
+                        onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === job.id ? null : job.id); }}
+                        style={{ display: "inline-block" }}
+                        title="Click to change status"
+                      >
                         <Badge status={job.status} editable />
                         {openDropdown === job.id && (
                           <StatusDropdown
@@ -423,6 +557,38 @@ export default function JobTracker({ session }) {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {filtered.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: "12px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+            <button
+              onClick={() => load(true)}
+              disabled={syncing}
+              style={{ border: "1px solid var(--border-md)", background: "var(--surface)", padding: "6px 10px", borderRadius: 8, fontSize: 12, color: "var(--text)" }}
+            >
+              {syncing ? "Refreshing..." : "Refresh emails"}
+            </button>
+            <span style={{ fontSize: 12, color: "var(--text-2)" }}>
+              Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length}
+            </span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                style={{ border: "1px solid var(--border-md)", background: "var(--surface)", padding: "6px 10px", borderRadius: 8, fontSize: 12, color: "var(--text)" }}
+              >
+                Prev
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                style={{ border: "1px solid var(--border-md)", background: "var(--surface)", padding: "6px 10px", borderRadius: 8, fontSize: 12, color: "var(--text)" }}
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </main>

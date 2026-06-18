@@ -26,7 +26,7 @@ function Landing() {
           Job application tracker
         </h1>
         <p style={{ color: "var(--text-2)", maxWidth: "420px", lineHeight: "1.7" }}>
-          Automatically parse your Gmail for job applications and track them from
+          Automatically parse your Gmail or Outlook for job applications and track them from
           confirmation to offer. Powered by Claude.
         </p>
       </div>
@@ -57,8 +57,34 @@ function Landing() {
         Sign in with Google
       </button>
 
+      <button
+        onClick={() => signIn("azure-ad")}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          background: "var(--surface)",
+          border: "1px solid var(--border-md)",
+          borderRadius: "10px",
+          padding: "12px 22px",
+          fontSize: "14px",
+          fontWeight: "500",
+          color: "var(--text)",
+          cursor: "pointer",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+          marginTop: "10px",
+        }}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+          <path d="M4 4h16v16H4z" fill="#0078d4" stroke="none" />
+          <path d="M6 6h5v12H6z" fill="white" stroke="none" />
+          <path d="M13 6h5v12h-5z" fill="#d7e5f6" stroke="none" />
+        </svg>
+        Sign in with Outlook
+      </button>
+
       <p style={{ marginTop: "1.5rem", fontSize: "12px", color: "var(--text-3)", maxWidth: "360px" }}>
-        We request read-only Gmail access. Your emails are processed by Claude and never stored beyond the extracted application data.
+        We request read-only mail access (Gmail/Outlook). Your emails are processed by Claude and never stored beyond the extracted application data.
       </p>
     </div>
   );
