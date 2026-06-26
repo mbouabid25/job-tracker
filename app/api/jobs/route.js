@@ -20,21 +20,20 @@ export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const forceRefresh = searchParams.get("refresh") === "true";
 
-  // Always persist the currently signed-in account so it participates in scans
   try {
     await ensureSessionAccount(session);
   } catch (e) {
     console.error("Failed to persist primary account", e);
   }
 
-  const lastSynced = getLastSynced(userId);
+  const lastSynced = await getLastSynced(userId);
   const cacheValid =
     lastSynced &&
-    Date.now() - new Date(lastSynced + "Z").getTime() < CACHE_TTL_MS;
+    Date.now() - new Date(lastSynced.endsWith("Z") ? lastSynced : lastSynced + "Z").getTime() < CACHE_TTL_MS;
 
   if (!forceRefresh && cacheValid) {
     return NextResponse.json({
-      jobs: getJobs(userId),
+      jobs: await getJobs(userId),
       lastSynced,
       cached: true,
     });
@@ -42,12 +41,12 @@ export async function GET(req) {
 
   try {
     const emails = await fetchJobEmailsForUser(userId, lastSynced || null);
-    markEmailsAsProcessed(userId, emails);
+    await markEmailsAsProcessed(userId, emails);
     const classified = await classifyApplications(emails);
-    if (classified.length > 0) upsertJobs(userId, classified);
-    else markSynced(userId);
+    if (classified.length > 0) await upsertJobs(userId, classified);
+    else await markSynced(userId);
     return NextResponse.json({
-      jobs: getJobs(userId),
+      jobs: await getJobs(userId),
       lastSynced: new Date().toISOString(),
       cached: false,
       found: classified.length,
@@ -65,7 +64,7 @@ export async function PATCH(req) {
   }
   const { updateJobStatus } = await import("@/lib/db");
   const { id, status } = await req.json();
-  updateJobStatus(session.user.email, id, status);
+  await updateJobStatus(session.user.email, id, status);
   return NextResponse.json({ ok: true });
 }
 
@@ -76,6 +75,6 @@ export async function DELETE(req) {
   }
   const { deleteJob } = await import("@/lib/db");
   const { id } = await req.json();
-  deleteJob(session.user.email, id);
+  await deleteJob(session.user.email, id);
   return NextResponse.json({ ok: true });
 }

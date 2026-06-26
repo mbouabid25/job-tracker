@@ -30,7 +30,7 @@ export async function GET(req) {
     const profile = await oauth2.userinfo.get();
     const accountEmail = profile.data.email;
 
-    upsertMailAccount({
+    await upsertMailAccount({
       ownerId: owner,
       provider: "google",
       accountEmail,

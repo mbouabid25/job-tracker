@@ -45,7 +45,7 @@ export async function GET(req) {
       accountEmail = me.mail || me.userPrincipalName || null;
     } catch (_) {}
 
-    upsertMailAccount({
+    await upsertMailAccount({
       ownerId: owner,
       provider: "outlook",
       accountEmail,

@@ -8,7 +8,7 @@ export async function GET() {
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
-  const accounts = listMailAccounts(session.user.email);
+  const accounts = await listMailAccounts(session.user.email);
   return NextResponse.json({ accounts });
 }
 
@@ -19,6 +19,6 @@ export async function DELETE(req) {
   }
   const { id } = await req.json();
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
-  deleteMailAccount(session.user.email, id);
+  await deleteMailAccount(session.user.email, id);
   return NextResponse.json({ ok: true });
 }
