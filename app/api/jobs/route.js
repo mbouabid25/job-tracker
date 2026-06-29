@@ -1,3 +1,5 @@
+export const maxDuration = 60; // Vercel max for hobby plan
+
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { fetchJobEmailsForUser, ensureSessionAccount, markEmailsAsProcessed } from "@/lib/mail";
