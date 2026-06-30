@@ -42,9 +42,16 @@ export async function GET(req) {
   }
 
   try {
-    const emails = await fetchJobEmailsForUser(userId, lastSynced || null);
-    await markEmailsAsProcessed(userId, emails);
+    // Pass null so Gmail/Outlook always search the full 6-month window;
+    // processed_emails table handles deduplication across refreshes
+    const emails = await fetchJobEmailsForUser(userId, null);
+    if (emails.length === 0) {
+      await markSynced(userId);
+      return NextResponse.json({ jobs: await getJobs(userId), lastSynced: new Date().toISOString(), cached: false, found: 0 });
+    }
+    // Classify first — only mark as processed after success so timeouts don't lose emails
     const classified = await classifyApplications(emails);
+    await markEmailsAsProcessed(userId, emails);
     if (classified.length > 0) await upsertJobs(userId, classified);
     else await markSynced(userId);
     return NextResponse.json({
