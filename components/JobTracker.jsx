@@ -99,6 +99,40 @@ function formatCountdown(ms) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+const DAY_MS = 86400000;
+
+function daysBetween(from, to) {
+  const a = new Date(from), b = new Date(to);
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.max(0, Math.round((b - a) / DAY_MS));
+}
+
+const STAGE_VERB = {
+  viewed: "Viewed", screening: "Screen call", assessment: "Assessment",
+  interview: "Interview", offer: "Offer", rejected: "Rejected", withdrawn: "Withdrawn",
+};
+
+// Days from applying to the current stage — or, still at "applied", days spent waiting.
+function elapsed(job) {
+  if (!job.applied_at) return null;
+  if (job.status === "applied") {
+    const d = daysBetween(job.applied_at, new Date());
+    return d == null ? null : { days: d, waiting: true };
+  }
+  const d = daysBetween(job.applied_at, job.stage_at || job.last_updated);
+  return d == null ? null : { days: d, waiting: false };
+}
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function median(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b), m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+}
+
 export default function JobTracker({ session }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -183,7 +217,9 @@ export default function JobTracker({ session }) {
   }, [filter, jobs.length]);
 
   const updateStatus = async (jobId, status) => {
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, status } : j)));
+    setJobs((prev) => prev.map((j) => (j.id === jobId
+      ? { ...j, status, stage_at: j.status !== status ? new Date().toISOString() : j.stage_at }
+      : j)));
     await fetch("/api/jobs", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -252,7 +288,7 @@ export default function JobTracker({ session }) {
     const dowCount = [0, 0, 0, 0, 0, 0, 0];
     const dayMap = new Map();
     for (const j of jobs) {
-      const raw = j.last_updated;
+      const raw = j.applied_at || j.last_updated;
       if (!raw) continue;
       const d = new Date(raw);
       if (isNaN(d)) continue;
@@ -278,22 +314,37 @@ export default function JobTracker({ session }) {
     const topCompanies = [...compMap.entries()].filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
     // ── pace ──
-    const dates = jobs.map((j) => new Date(j.last_updated)).filter((d) => !isNaN(d)).sort((a, b) => a - b);
+    const dates = jobs.map((j) => new Date(j.applied_at || j.last_updated)).filter((d) => !isNaN(d)).sort((a, b) => a - b);
     const spanDays = dates.length > 1 ? Math.max(1, (dates[dates.length - 1] - dates[0]) / 86400000) : 1;
     const perWeek = Math.round((total / spanDays) * 7 * 10) / 10;
+
+    // ── response times: application date -> the email that set the current stage ──
+    const RESP = ["screening", "assessment", "interview", "offer", "rejected"];
+    const timed = jobs.map((j) => ({ j, e: elapsed(j) })).filter((x) => x.e && !x.e.waiting && RESP.includes(x.j.status));
+    const responseTimes = RESP.map((st) => {
+      const xs = timed.filter((x) => x.j.status === st).sort((a, b) => a.e.days - b.e.days);
+      if (!xs.length) return null;
+      return { status: st, n: xs.length, median: median(xs.map((x) => x.e.days)), fastest: xs[0], slowest: xs[xs.length - 1] };
+    }).filter(Boolean);
+    const respondedRows = jobs.filter((j) => RESP.includes(j.status)).length;
+    const ghosted = jobs.map(elapsed).filter((e) => e && e.waiting && e.days >= 30).length;
 
     return {
       total, viewed, screening, assessment, interview, offer, rejected, positive, responded, awaiting, pct,
       months, peakMonth, peakDay, peakDow: DOW[peakDowIdx], peakDowCount: dowCount[peakDowIdx],
       topCompanies, perWeek,
+      responseTimes, timedCount: timed.length, respondedRows, ghosted,
       firstDate: dates[0], lastDate: dates[dates.length - 1],
     };
   }, [jobs]);
 
   const exportCsv = () => {
     const rows = [
-      ["Company", "Position", "Status", "Recruiter", "Last Updated", "Notes"],
-      ...jobs.map((j) => [j.company, j.position, j.status, j.recruiter || "", j.last_updated || "", j.notes || ""]),
+      ["Company", "Position", "Status", "Applied", "Days to current stage", "Recruiter", "Last Updated", "Notes"],
+      ...jobs.map((j) => {
+        const e = elapsed(j);
+        return [j.company, j.position, j.status, j.applied_at || "", e && !e.waiting ? String(e.days) : "", j.recruiter || "", j.last_updated || "", j.notes || ""];
+      }),
     ];
     const csv = rows.map((r) => r.map((c) => `"${(c || "").replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -581,6 +632,32 @@ export default function JobTracker({ session }) {
                   </div>
 
                   <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px" }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 12 }}>Time to hear back</div>
+                    {insights.responseTimes.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "var(--text-3)" }}>No replies with a known application date yet.</div>
+                    ) : (
+                      insights.responseTimes.map((r) => (
+                        <div key={r.status} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                          <span style={{ color: "var(--text-2)" }}>{STATUS[r.status].label} <span style={{ color: "var(--text-3)" }}>({r.n})</span></span>
+                          <span style={{ color: "var(--text)", textAlign: "right" }}>median {plural(r.median, "day")}</span>
+                        </div>
+                      ))
+                    )}
+                    {(() => {
+                      const r = insights.responseTimes.find((x) => x.status === "rejected");
+                      return r && r.n > 1 ? (
+                        <div style={{ fontSize: 11.5, color: "var(--text-3)", marginTop: 8, lineHeight: 1.6 }}>
+                          Fastest rejection: {r.fastest.j.company} ({plural(r.fastest.e.days, "day")}) &middot; slowest: {r.slowest.j.company} ({plural(r.slowest.e.days, "day")})
+                        </div>
+                      ) : null;
+                    })()}
+                    <div style={{ fontSize: 11.5, color: "var(--text-3)", marginTop: 8, lineHeight: 1.6 }}>
+                      {plural(insights.ghosted, "application")} with no reply after 30+ days
+                      {insights.timedCount < insights.respondedRows && <> &middot; {insights.timedCount} of {insights.respondedRows} replies have a known application date</>}
+                    </div>
+                  </div>
+
+                  <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px" }}>
                     <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 12 }}>Patterns</div>
                     {[
                       ["Busiest single day", insights.peakDay[0] ? `${formatDate(insights.peakDay[0])} — ${insights.peakDay[1]} apps` : "—"],
@@ -705,7 +782,7 @@ export default function JobTracker({ session }) {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  {["Company / Position", "Status", "Recruiter", "Last update", "Notes", ""].map((h, i) => (
+                  {["Company / Position", "Status", "Response time", "Recruiter", "Last update", "Notes", ""].map((h, i) => (
                     <th key={i} style={{
                       padding: "10px 14px",
                       textAlign: "left",
@@ -766,6 +843,21 @@ export default function JobTracker({ session }) {
                           />
                         )}
                       </div>
+                    </td>
+                    <td style={{ padding: "12px 14px", fontSize: 12, whiteSpace: "nowrap" }}>
+                      {(() => {
+                        const e = elapsed(job);
+                        if (!e) return <span style={{ color: "var(--text-3)" }}>&mdash;</span>;
+                        const c = STATUS[job.status]?.color || "gray";
+                        return (
+                          <>
+                            <div style={{ fontWeight: 500, color: e.waiting ? "var(--text-2)" : `var(--${c}-text)` }}>
+                              {e.waiting ? `${plural(e.days, "day")} waiting` : `${STAGE_VERB[job.status] || job.status} after ${plural(e.days, "day")}`}
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 1 }}>Applied {formatDate(job.applied_at)}</div>
+                          </>
+                        );
+                      })()}
                     </td>
                     <td style={{ padding: "12px 14px", fontSize: 13, color: job.recruiter ? "var(--text)" : "var(--text-3)" }}>
                       {job.recruiter || <em>not listed</em>}
