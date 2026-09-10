@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { signOut } from "next-auth/react";
 
 const REFRESH_MS = 10 * 60 * 1000;
@@ -7,14 +7,16 @@ const PAGE_SIZE = 20;
 
 const STATUS = {
   applied:   { label: "Applied",    color: "purple" },
+  viewed:    { label: "Viewed",     color: "gray" },
   screening: { label: "Screening",  color: "amber" },
+  assessment:{ label: "Assessment", color: "green" },
   interview: { label: "Interview",  color: "blue" },
   offer:     { label: "Offer",      color: "teal" },
   rejected:  { label: "Rejected",   color: "red" },
   withdrawn: { label: "Withdrawn",  color: "gray" },
 };
 
-const FILTERS = ["all", "applied", "screening", "interview", "offer", "rejected", "withdrawn"];
+const FILTERS = ["all", "applied", "viewed", "screening", "assessment", "interview", "offer", "rejected"];
 
 function Badge({ status, onClick, editable }) {
   const s = STATUS[status] || { label: status, color: "gray" };
@@ -104,6 +106,8 @@ export default function JobTracker({ session }) {
   const [error, setError] = useState(null);
   const [lastSynced, setLastSynced] = useState(null);
   const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [showInsights, setShowInsights] = useState(false);
   const [countdown, setCountdown] = useState(null);
   const [openDropdown, setOpenDropdown] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -214,17 +218,77 @@ export default function JobTracker({ session }) {
     load(true);
   };
 
-  const filtered = filter === "all" ? jobs : jobs.filter((j) => j.status === filter);
+  const q = search.trim().toLowerCase();
+  const searched = q
+    ? jobs.filter((j) =>
+        [j.company, j.position, j.recruiter, j.notes]
+          .some((v) => String(v || "").toLowerCase().includes(q))
+      )
+    : jobs;
+  const filtered = filter === "all" ? searched : searched.filter((j) => j.status === filter);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   const stats = {
     total: jobs.length,
-    active: jobs.filter((j) => ["applied", "screening", "interview"].includes(j.status)).length,
+    active: jobs.filter((j) => ["applied", "viewed", "screening", "assessment", "interview"].includes(j.status)).length,
     offers: jobs.filter((j) => j.status === "offer").length,
     rejected: jobs.filter((j) => j.status === "rejected").length,
   };
+
+  const insights = useMemo(() => {
+    if (!jobs.length) return null;
+    const total = jobs.length;
+    const by = (s) => jobs.filter((j) => j.status === s).length;
+    const viewed = by("viewed"), screening = by("screening"), assessment = by("assessment"), interview = by("interview"), offer = by("offer"), rejected = by("rejected");
+    const positive = screening + assessment + interview + offer;   // moved forward at least one stage
+    const responded = positive + rejected;            // any human reply, good or bad
+    const awaiting = total - responded;
+    const pct = (n) => total ? Math.round((n / total) * 1000) / 10 : 0;
+
+    // ── monthly volume from the email date ──
+    const monthMap = new Map();
+    const dowCount = [0, 0, 0, 0, 0, 0, 0];
+    const dayMap = new Map();
+    for (const j of jobs) {
+      const raw = j.last_updated;
+      if (!raw) continue;
+      const d = new Date(raw);
+      if (isNaN(d)) continue;
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      monthMap.set(ym, (monthMap.get(ym) || 0) + 1);
+      dowCount[d.getDay()] += 1;
+      const dk = d.toISOString().slice(0, 10);
+      dayMap.set(dk, (dayMap.get(dk) || 0) + 1);
+    }
+    const months = [...monthMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const peakMonth = months.reduce((a, b) => (b[1] > a[1] ? b : a), months[0] || ["", 0]);
+    const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const peakDowIdx = dowCount.indexOf(Math.max(...dowCount));
+    const peakDay = [...dayMap.entries()].sort((a, b) => b[1] - a[1])[0] || ["", 0];
+
+    // ── companies applied to more than once ──
+    const compMap = new Map();
+    for (const j of jobs) {
+      const c = (j.company || "").trim();
+      if (!c || c.toLowerCase() === "unknown company") continue;
+      compMap.set(c, (compMap.get(c) || 0) + 1);
+    }
+    const topCompanies = [...compMap.entries()].filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    // ── pace ──
+    const dates = jobs.map((j) => new Date(j.last_updated)).filter((d) => !isNaN(d)).sort((a, b) => a - b);
+    const spanDays = dates.length > 1 ? Math.max(1, (dates[dates.length - 1] - dates[0]) / 86400000) : 1;
+    const perWeek = Math.round((total / spanDays) * 7 * 10) / 10;
+
+    return {
+      total, viewed, screening, assessment, interview, offer, rejected, positive, responded, awaiting, pct,
+      months, peakMonth, peakDay, peakDow: DOW[peakDowIdx], peakDowCount: dowCount[peakDowIdx],
+      topCompanies, perWeek,
+      firstDate: dates[0], lastDate: dates[dates.length - 1],
+    };
+  }, [jobs]);
 
   const exportCsv = () => {
     const rows = [
@@ -420,6 +484,134 @@ export default function JobTracker({ session }) {
           </div>
         )}
 
+        {/* Insights */}
+        {insights && (
+          <div style={{ marginBottom: "1.5rem" }}>
+            <button
+              onClick={() => setShowInsights((v) => !v)}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                background: "transparent", border: "1px solid var(--border)",
+                borderRadius: 8, padding: "7px 14px", fontSize: 12.5,
+                fontWeight: 500, color: "var(--text-2)", marginBottom: showInsights ? 12 : 0,
+              }}
+            >
+              <span style={{ transform: showInsights ? "rotate(90deg)" : "none", transition: "transform .18s", display: "inline-block" }}>&#9656;</span>
+              Insights
+              <span style={{ color: "var(--text-3)", fontWeight: 400 }}>
+                &middot; {insights.pct(insights.positive)}% callback &middot; {insights.perWeek}/week
+              </span>
+            </button>
+
+            {showInsights && (
+              <div style={{ display: "grid", gap: 10 }}>
+
+                {/* headline rates */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+                  {[
+                    { label: "Callback rate", value: insights.pct(insights.positive) + "%", sub: `${insights.positive} of ${insights.total} moved forward`, color: "var(--green-text)" },
+                    { label: "Any response", value: insights.pct(insights.responded) + "%", sub: `${insights.responded} replied (incl. rejections)`, color: "var(--blue-text)" },
+                    { label: "Still waiting", value: insights.pct(insights.awaiting) + "%", sub: `${insights.awaiting} with no reply yet`, color: "var(--text-2)" },
+                    { label: "Rejection rate", value: insights.pct(insights.rejected) + "%", sub: `${insights.rejected} explicit rejections`, color: "var(--red-text)" },
+                  ].map((c) => (
+                    <div key={c.label} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px" }}>
+                      <div style={{ fontSize: 11.5, color: "var(--text-2)", marginBottom: 4 }}>{c.label}</div>
+                      <div style={{ fontSize: 24, fontWeight: 600, color: c.color, lineHeight: 1.1 }}>{c.value}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>{c.sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* applications over time */}
+                <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 500 }}>Applications over time</div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-3)" }}>
+                      Busiest month: <strong style={{ color: "var(--text-2)" }}>
+                        {new Date(insights.peakMonth[0] + "-02").toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+                      </strong> ({insights.peakMonth[1]})
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 130 }}>
+                    {insights.months.map(([ym, n]) => {
+                      const max = Math.max(...insights.months.map((x) => x[1])) || 1;
+                      const isPeak = ym === insights.peakMonth[0];
+                      return (
+                        <div key={ym} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, minWidth: 0 }}>
+                          <div style={{ fontSize: 11, color: isPeak ? "var(--text)" : "var(--text-3)", fontWeight: isPeak ? 600 : 400 }}>{n}</div>
+                          <div title={`${ym}: ${n}`} style={{
+                            width: "100%",
+                            height: `${Math.max(3, (n / max) * 92)}px`,
+                            background: isPeak ? "var(--blue)" : "var(--border-md)",
+                            borderRadius: "4px 4px 0 0",
+                            transition: "height .3s",
+                          }} />
+                          <div style={{ fontSize: 10.5, color: "var(--text-3)", whiteSpace: "nowrap" }}>
+                            {new Date(ym + "-02").toLocaleDateString(undefined, { month: "short" })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* funnel + patterns */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10 }}>
+
+                  <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px" }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 12 }}>Pipeline funnel</div>
+                    {[
+                      { label: "Applied", n: insights.total, color: "var(--blue)" },
+                      { label: "Viewed", n: insights.viewed + insights.positive, color: "var(--gray-text)" },
+                      { label: "Screening", n: insights.screening + insights.assessment + insights.interview + insights.offer, color: "var(--purple-text)" },
+                      { label: "Assessment", n: insights.assessment + insights.interview + insights.offer, color: "var(--teal-text)" },
+                      { label: "Interview", n: insights.interview + insights.offer, color: "var(--amber-text)" },
+                      { label: "Offer", n: insights.offer, color: "var(--green-text)" },
+                    ].map((r) => (
+                      <div key={r.label} style={{ marginBottom: 9 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, marginBottom: 3 }}>
+                          <span style={{ color: "var(--text-2)" }}>{r.label}</span>
+                          <span style={{ color: "var(--text-3)" }}>{r.n} &middot; {insights.pct(r.n)}%</span>
+                        </div>
+                        <div style={{ height: 7, background: "var(--bg)", borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.max(0.6, (r.n / insights.total) * 100)}%`, background: r.color, borderRadius: 4, transition: "width .3s" }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px" }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 12 }}>Patterns</div>
+                    {[
+                      ["Busiest single day", insights.peakDay[0] ? `${formatDate(insights.peakDay[0])} — ${insights.peakDay[1]} apps` : "—"],
+                      ["Most active weekday", `${insights.peakDow} (${insights.peakDowCount})`],
+                      ["Average pace", `${insights.perWeek} applications / week`],
+                      ["Tracking since", insights.firstDate ? formatDate(insights.firstDate.toISOString()) : "—"],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                        <span style={{ color: "var(--text-2)" }}>{k}</span>
+                        <span style={{ color: "var(--text)", textAlign: "right" }}>{v}</span>
+                      </div>
+                    ))}
+                    {insights.topCompanies.length > 0 && (
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ fontSize: 11.5, color: "var(--text-2)", marginBottom: 5 }}>Applied more than once</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                          {insights.topCompanies.map(([c, n]) => (
+                            <span key={c} style={{ fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 20, padding: "3px 9px", color: "var(--text-2)" }}>
+                              {c} &times;{n}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Error */}
         {error && (
           <div style={{
@@ -435,10 +627,40 @@ export default function JobTracker({ session }) {
           </div>
         )}
 
+        {/* Search */}
+        <div style={{ position: "relative", marginBottom: "0.75rem", maxWidth: 420 }}>
+          <input
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            placeholder="Search company, role, recruiter, or notes..."
+            style={{
+              width: "100%",
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "9px 32px 9px 12px",
+              fontSize: 13,
+              color: "var(--text)",
+              outline: "none",
+            }}
+          />
+          {search && (
+            <button
+              onClick={() => { setSearch(""); setPage(1); }}
+              title="Clear search"
+              style={{
+                position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                background: "transparent", border: "none", color: "var(--text-3)",
+                fontSize: 15, lineHeight: 1, padding: 2,
+              }}
+            >&times;</button>
+          )}
+        </div>
+
         {/* Filters */}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "1rem" }}>
           {FILTERS.map((f) => {
-            const count = f === "all" ? jobs.length : jobs.filter((j) => j.status === f).length;
+            const count = f === "all" ? searched.length : searched.filter((j) => j.status === f).length;
             return (
               <button
                 key={f}
@@ -506,8 +728,27 @@ export default function JobTracker({ session }) {
                     }}
                   >
                     <td style={{ padding: "12px 14px" }}>
-                      <div style={{ fontWeight: 500, fontSize: 13 }}>{job.company}</div>
-                      <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 1 }}>{job.position}</div>
+                      {job.source_id ? (
+                        <a
+                          href={`https://mail.google.com/mail/u/0/#all/${job.source_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          title="Open the source email in Gmail"
+                          style={{ textDecoration: "none", color: "inherit", display: "block" }}
+                        >
+                          <div style={{ fontWeight: 500, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                            {job.company}
+                            <span style={{ fontSize: 10, color: "var(--text-3)" }}>&#8599;</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 1 }}>{job.position}</div>
+                        </a>
+                      ) : (
+                        <>
+                          <div style={{ fontWeight: 500, fontSize: 13 }}>{job.company}</div>
+                          <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 1 }}>{job.position}</div>
+                        </>
+                      )}
                     </td>
                     <td style={{ padding: "12px 14px", position: "relative" }}>
                       <div
@@ -532,10 +773,8 @@ export default function JobTracker({ session }) {
                     <td style={{ padding: "12px 14px", fontSize: 12, color: "var(--text-2)", whiteSpace: "nowrap" }}>
                       {formatDate(job.last_updated)}
                     </td>
-                    <td style={{ padding: "12px 14px", fontSize: 12, color: "var(--text-2)", maxWidth: 220 }}>
-                      <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                        {job.notes || "—"}
-                      </span>
+                    <td style={{ padding: "12px 14px", fontSize: 12, color: "var(--text-2)", maxWidth: 420, whiteSpace: "normal", lineHeight: 1.6, verticalAlign: "top" }}>
+                      {job.notes || "—"}
                     </td>
                     <td style={{ padding: "12px 14px" }}>
                       <button

@@ -86,6 +86,30 @@ function Landing() {
       <p style={{ marginTop: "1.5rem", fontSize: "12px", color: "var(--text-3)", maxWidth: "360px" }}>
         We request read-only mail access (Gmail/Outlook). Your emails are processed by Claude and never stored beyond the extracted application data.
       </p>
+
+      {/* Student/work accounts are frequently blocked by the institution's IT
+          policy, which no amount of retrying will fix. Point people at the
+          workaround instead of letting them bounce off a consent error. */}
+      <div style={{
+        marginTop: "1.25rem",
+        maxWidth: "380px",
+        border: "1px solid var(--border)",
+        borderRadius: 10,
+        padding: "12px 14px",
+        background: "var(--surface)",
+        textAlign: "left",
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4, color: "var(--text-2)" }}>
+          Using a school or work account?
+        </div>
+        <p style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.6, margin: 0 }}>
+          Universities and employers often block third-party apps from reading mail, so
+          sign-in may fail no matter what you try. If that happens, set your school inbox to{" "}
+          <strong style={{ color: "var(--text-2)", fontWeight: 500 }}>forward to your personal address</strong>{" "}
+          and sign in here with the personal account instead — your applications will be
+          tracked all the same.
+        </p>
+      </div>
     </div>
   );
 }

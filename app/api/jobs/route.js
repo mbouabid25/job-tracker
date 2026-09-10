@@ -49,16 +49,33 @@ export async function GET(req) {
       await markSynced(userId);
       return NextResponse.json({ jobs: await getJobs(userId), lastSynced: new Date().toISOString(), cached: false, found: 0 });
     }
-    // Classify first — only mark as processed after success so timeouts don't lose emails
+    // Classify first — only mark as processed after success so timeouts don't lose emails.
     const classified = await classifyApplications(emails);
-    await markEmailsAsProcessed(userId, emails);
-    if (classified.length > 0) await upsertJobs(userId, classified);
-    else await markSynced(userId);
+
+    // Only retire an email once it has actually contributed to a tracked
+    // application. Anything the classifier could not place stays unprocessed so
+    // a later, better run (or a prompt fix) can still pick it up, instead of
+    // being silently discarded forever.
+    const stats = classified.length > 0 ? await upsertJobs(userId, classified) : { inserted: 0, updated: 0, skipped: 0 };
+
+    const accounted = new Set();
+    for (const c of classified) {
+      for (const id of c.sourceIds || []) accounted.add(id);
+    }
+    const toRetire = accounted.size > 0
+      ? emails.filter((e) => accounted.has(e.id))
+      : emails; // classifier gave no provenance — fall back to previous behaviour
+    await markEmailsAsProcessed(userId, toRetire);
+    await markSynced(userId);
+
     return NextResponse.json({
       jobs: await getJobs(userId),
       lastSynced: new Date().toISOString(),
       cached: false,
       found: classified.length,
+      scanned: emails.length,
+      retired: toRetire.length,
+      stats,
     });
   } catch (e) {
     console.error(e);
