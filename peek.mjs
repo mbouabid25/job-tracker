@@ -1,0 +1,10 @@
+import pkg from '@next/env'; const { loadEnvConfig } = pkg; loadEnvConfig(process.cwd(), false);
+const { createClient } = await import('@libsql/client');
+const db = createClient({ url: process.env.TURSO_DATABASE_URL, authToken: process.env.TURSO_AUTH_TOKEN });
+const s = await db.execute("SELECT status, COUNT(*) c FROM jobs GROUP BY status ORDER BY c DESC");
+console.log('STATUS NOW:'); s.rows.forEach(r=>console.log('  ', String(r.status).padEnd(10), r.c));
+const t = await db.execute("SELECT COUNT(*) n FROM jobs");
+console.log('total applications:', t.rows[0].n);
+const k = await db.execute("SELECT company,position,status FROM jobs WHERE lower(company) LIKE '%keystone%'");
+console.log('keystone:', k.rows.map(r=>`${r.company}/${r.position}=${r.status}`).join(', ') || 'none');
+process.exit(0);

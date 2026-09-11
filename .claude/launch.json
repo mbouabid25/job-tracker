@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "job-tracker",
+      "runtimeExecutable": "/opt/homebrew/opt/node@20/bin/npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "portfolio",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4173", "--directory", "/Users/marwa/Desktop/Life/marwa-bouabid-portfolio"],
+      "port": 4173
+    }
+  ]
+}

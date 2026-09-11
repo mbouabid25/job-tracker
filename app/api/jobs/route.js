@@ -7,7 +7,7 @@ import { classifyApplications } from "@/lib/classifier";
 import { upsertJobs, getJobs, getLastSynced, markSynced } from "@/lib/db";
 import { NextResponse } from "next/server";
 
-const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_TTL_MS = 3 * 60 * 1000; // 3 min — keeps costs low but surfaces new applications quickly
 
 export async function GET(req) {
   const session = await getServerSession(authOptions);

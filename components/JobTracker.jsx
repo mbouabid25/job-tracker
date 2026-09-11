@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { signOut } from "next-auth/react";
 
-const REFRESH_MS = 10 * 60 * 1000;
+const REFRESH_MS = 3 * 60 * 1000; // auto-refresh every 3 min so new applications appear quickly
 const PAGE_SIZE = 20;
 
 const STATUS = {
@@ -148,6 +148,7 @@ export default function JobTracker({ session }) {
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [sort, setSort] = useState("recent"); // "recent" | "oldest" | "company" | "status"
   const nextRefreshAt = useRef(null);
 
   const load = useCallback(async (force = false) => {
@@ -262,9 +263,31 @@ export default function JobTracker({ session }) {
       )
     : jobs;
   const filtered = filter === "all" ? searched : searched.filter((j) => j.status === filter);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  const sorted = [...filtered].sort((a, b) => {
+    if (sort === "recent") {
+      const da = new Date(a.applied_at || a.last_updated || 0);
+      const db = new Date(b.applied_at || b.last_updated || 0);
+      return db - da;
+    }
+    if (sort === "oldest") {
+      const da = new Date(a.applied_at || a.last_updated || 0);
+      const db = new Date(b.applied_at || b.last_updated || 0);
+      return da - db;
+    }
+    if (sort === "company") {
+      return (a.company || "").localeCompare(b.company || "");
+    }
+    if (sort === "status") {
+      const order = ["offer", "interview", "assessment", "screening", "viewed", "applied", "rejected", "withdrawn"];
+      return order.indexOf(a.status) - order.indexOf(b.status);
+    }
+    return 0;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
-  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const paginated = sorted.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   const stats = {
     total: jobs.length,
@@ -734,28 +757,51 @@ export default function JobTracker({ session }) {
           )}
         </div>
 
-        {/* Filters */}
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "1rem" }}>
-          {FILTERS.map((f) => {
-            const count = f === "all" ? searched.length : searched.filter((j) => j.status === f).length;
-            return (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                style={{
-                  background: filter === f ? "var(--surface)" : "transparent",
-                  border: filter === f ? "1px solid var(--border-md)" : "1px solid transparent",
-                  borderRadius: 20,
-                  padding: "5px 13px",
-                  fontSize: 12,
-                  fontWeight: filter === f ? 500 : 400,
-                  color: filter === f ? "var(--text)" : "var(--text-2)",
-                }}
-              >
-                {f.charAt(0).toUpperCase() + f.slice(1)} ({count})
-              </button>
-            );
-          })}
+        {/* Filters + Sort */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: "1rem" }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {FILTERS.map((f) => {
+              const count = f === "all" ? searched.length : searched.filter((j) => j.status === f).length;
+              return (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  style={{
+                    background: filter === f ? "var(--surface)" : "transparent",
+                    border: filter === f ? "1px solid var(--border-md)" : "1px solid transparent",
+                    borderRadius: 20,
+                    padding: "5px 13px",
+                    fontSize: 12,
+                    fontWeight: filter === f ? 500 : 400,
+                    color: filter === f ? "var(--text)" : "var(--text-2)",
+                  }}
+                >
+                  {f.charAt(0).toUpperCase() + f.slice(1)} ({count})
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, color: "var(--text-3)", whiteSpace: "nowrap" }}>Sort:</span>
+            <select
+              value={sort}
+              onChange={(e) => { setSort(e.target.value); setPage(1); }}
+              style={{
+                background: "var(--surface)",
+                border: "1px solid var(--border-md)",
+                borderRadius: 8,
+                padding: "5px 10px",
+                fontSize: 12,
+                color: "var(--text)",
+                cursor: "pointer",
+              }}
+            >
+              <option value="recent">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="company">Company A–Z</option>
+              <option value="status">By status</option>
+            </select>
+          </div>
         </div>
 
         {/* Table */}
@@ -765,7 +811,7 @@ export default function JobTracker({ session }) {
             <p>Scanning your inbox for job emails...</p>
             <p style={{ fontSize: 12, marginTop: 6, color: "var(--text-3)" }}>This may take a moment</p>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : sorted.length === 0 ? (
           <div style={{ textAlign: "center", padding: "4rem", color: "var(--text-2)" }}>
             {jobs.length === 0 ? (
               <>
@@ -892,7 +938,7 @@ export default function JobTracker({ session }) {
         )}
 
         {/* Pagination */}
-        {filtered.length > 0 && (
+        {sorted.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: "12px", justifyContent: "flex-end", flexWrap: "wrap" }}>
             <button
               onClick={() => load(true)}
@@ -902,7 +948,7 @@ export default function JobTracker({ session }) {
               {syncing ? "Refreshing..." : "Refresh emails"}
             </button>
             <span style={{ fontSize: 12, color: "var(--text-2)" }}>
-              Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length}
+              Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, sorted.length)} of {sorted.length}
             </span>
             <div style={{ display: "flex", gap: 6 }}>
               <button
