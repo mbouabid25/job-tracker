@@ -43,11 +43,12 @@ export async function GET(req) {
 
   try {
     // Pass null so Gmail/Outlook always search the full 6-month window;
-    // processed_emails table handles deduplication across refreshes
-    const emails = await fetchJobEmailsForUser(userId, null);
+    // processed_emails table handles deduplication across refreshes.
+    // hasMore=true means there are still unseen emails beyond this batch.
+    const { emails, hasMore } = await fetchJobEmailsForUser(userId, null);
     if (emails.length === 0) {
       await markSynced(userId);
-      return NextResponse.json({ jobs: await getJobs(userId), lastSynced: new Date().toISOString(), cached: false, found: 0 });
+      return NextResponse.json({ jobs: await getJobs(userId), lastSynced: new Date().toISOString(), cached: false, found: 0, hasMore: false });
     }
     // Classify first — only mark as processed after success so timeouts don't lose emails.
     const classified = await classifyApplications(emails);
@@ -76,6 +77,7 @@ export async function GET(req) {
       scanned: emails.length,
       retired: toRetire.length,
       stats,
+      hasMore, // true if more unseen emails remain — frontend should auto-continue
     });
   } catch (e) {
     console.error(e);

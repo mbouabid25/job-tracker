@@ -149,7 +149,9 @@ export default function JobTracker({ session }) {
   const [page, setPage] = useState(1);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [sort, setSort] = useState("recent"); // "recent" | "oldest" | "company" | "status"
+  const [catchingUp, setCatchingUp] = useState(false); // true while auto-continuing a backlog scan
   const nextRefreshAt = useRef(null);
+  const catchUpRef = useRef(false); // tracks whether auto-continue is active across re-renders
 
   const load = useCallback(async (force = false) => {
     if (force) setSyncing(true);
@@ -163,8 +165,19 @@ export default function JobTracker({ session }) {
       setLastSynced(data.lastSynced);
       nextRefreshAt.current = Date.now() + REFRESH_MS;
       setCountdown(REFRESH_MS);
+
+      // If there are more unseen emails, keep scanning automatically
+      if (data.hasMore && force && catchUpRef.current) {
+        setCatchingUp(true);
+        setTimeout(() => load(true), 1500);
+      } else {
+        setCatchingUp(false);
+        catchUpRef.current = false;
+      }
     } catch (e) {
       setError(e.message);
+      setCatchingUp(false);
+      catchUpRef.current = false;
     } finally {
       setLoading(false);
       setSyncing(false);
@@ -516,7 +529,7 @@ export default function JobTracker({ session }) {
               Export CSV
             </button>
             <button
-              onClick={() => load(true)}
+              onClick={() => { catchUpRef.current = true; load(true); }}
               disabled={syncing}
               style={{
                 background: "var(--blue-bg)",
@@ -534,7 +547,7 @@ export default function JobTracker({ session }) {
               {syncing ? (
                 <>
                   <span style={{ width: 14, height: 14, border: "1.5px solid", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite", display: "inline-block" }} />
-                  Scanning...
+                  {catchingUp ? "Catching up…" : "Scanning..."}
                 </>
               ) : "Refresh emails"}
             </button>
