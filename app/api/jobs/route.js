@@ -59,14 +59,15 @@ export async function GET(req) {
     // being silently discarded forever.
     const stats = classified.length > 0 ? await upsertJobs(userId, classified) : { inserted: 0, updated: 0, skipped: 0 };
 
+    // Only retire emails that were actually classified into a job.
+    // Never fall back to retiring everything — if classification failed or
+    // returned nothing, keep emails unprocessed so the next run can try again.
     const accounted = new Set();
     for (const c of classified) {
       for (const id of c.sourceIds || []) accounted.add(id);
     }
-    const toRetire = accounted.size > 0
-      ? emails.filter((e) => accounted.has(e.id))
-      : emails; // classifier gave no provenance — fall back to previous behaviour
-    await markEmailsAsProcessed(userId, toRetire);
+    const toRetire = emails.filter((e) => accounted.has(e.id));
+    if (toRetire.length > 0) await markEmailsAsProcessed(userId, toRetire);
     await markSynced(userId);
 
     return NextResponse.json({
